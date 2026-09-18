@@ -9,7 +9,9 @@ import com.internalrecorder.config.RecorderConfig;
 import java.io.BufferedOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
-import java.nio.file.Files;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -35,14 +37,15 @@ public final class FfmpegEncoder {
     private Thread audioThread;
     private volatile boolean running;
     private volatile long startedAtNanos;
-    private Path audioPipe;
+    private ServerSocket audioServer;
+    private Socket audioSocket;
 
     public FfmpegEncoder(RecorderConfig config, int inputWidth, int inputHeight, Path output, boolean audioEnabled) {
         this.config = config;
         this.inputWidth = inputWidth;
         this.inputHeight = inputHeight;
         this.output = output;
-        this.audioEnabled = audioEnabled && isNamedPipeSupported();
+        this.audioEnabled = audioEnabled;
     }
 
     public boolean start() throws IOException {
@@ -64,8 +67,9 @@ public final class FfmpegEncoder {
         command.add("pipe:0");
 
         if (audioEnabled) {
-            audioPipe = output.resolveSibling(output.getFileName() + ".audio.pipe");
-            createNamedPipe(audioPipe);
+            audioServer = new ServerSocket();
+            audioServer.bind(new InetSocketAddress("127.0.0.1", 0));
+            audioServer.setSoTimeout(5_000);
             command.add("-f");
             command.add("s16le");
             command.add("-ar");
@@ -73,7 +77,7 @@ public final class FfmpegEncoder {
             command.add("-ac");
             command.add("2");
             command.add("-i");
-            command.add(audioPipe.toString());
+            command.add("tcp://127.0.0.1:" + audioServer.getLocalPort());
         }
 
         command.add("-vf");
@@ -101,7 +105,7 @@ public final class FfmpegEncoder {
             process = builder.start();
             videoInput = new BufferedOutputStream(process.getOutputStream(), 1024 * 1024);
             if (audioEnabled) {
-                audioThread = new Thread(this::writeAudioPipe, "InternalRecorder-audio");
+                audioThread = new Thread(this::writeAudioSocket, "InternalRecorder-audio");
                 audioThread.start();
             }
             running = true;
@@ -112,7 +116,11 @@ public final class FfmpegEncoder {
             AudioCaptureBridge.attach(this);
             return true;
         } catch (IOException exception) {
-            deleteAudioPipe();
+            closeAudioTransport();
+            if (process != null) {
+                process.destroyForcibly();
+                process = null;
+            }
             throw exception;
         }
     }
@@ -150,6 +158,7 @@ public final class FfmpegEncoder {
         running = false;
         AudioCaptureBridge.detach();
         AudioCaptureBridge.stopRecording();
+        closeAudioServer();
         while (!videoQueue.offer(END)) {
             videoQueue.poll();
         }
@@ -160,6 +169,7 @@ public final class FfmpegEncoder {
             }
             join(audioThread);
         }
+        closeAudioTransport();
         closeQuietly(videoInput);
         closeQuietly(audioInput);
         if (process != null) {
@@ -172,7 +182,6 @@ public final class FfmpegEncoder {
                 process.destroyForcibly();
             }
         }
-        deleteAudioPipe();
     }
 
     private void writeVideo() {
@@ -192,9 +201,14 @@ public final class FfmpegEncoder {
         }
     }
 
-    private void writeAudioPipe() {
+    private void writeAudioSocket() {
         try {
-            audioInput = new BufferedOutputStream(Files.newOutputStream(audioPipe), 64 * 1024);
+            ServerSocket server = audioServer;
+            if (server == null) {
+                return;
+            }
+            audioSocket = server.accept();
+            audioInput = new BufferedOutputStream(audioSocket.getOutputStream(), 64 * 1024);
             long cursorNanos = 0L;
             while (running || !audioEventQueue.isEmpty() || !audioTimeline.isEmpty()) {
                 AudioEvent event = audioEventQueue.poll(10, TimeUnit.MILLISECONDS);
@@ -216,36 +230,35 @@ public final class FfmpegEncoder {
             }
             audioInput.flush();
         } catch (IOException exception) {
-            System.err.println("[InternalRecorder] Audio pipe closed: " + exception.getMessage());
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-        }
-    }
-
-    private static boolean isNamedPipeSupported() {
-        return !System.getProperty("os.name", "").toLowerCase().contains("win");
-    }
-
-    private static void createNamedPipe(Path pipe) throws IOException {
-        Files.deleteIfExists(pipe);
-        Process mkfifo = new ProcessBuilder("mkfifo", pipe.toString()).inheritIO().start();
-        try {
-            if (mkfifo.waitFor() != 0) {
-                throw new IOException("mkfifo failed");
+            if (running) {
+                System.err.println("[InternalRecorder] Audio socket closed: " + exception.getMessage());
+                closeAudioTransport();
             }
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
-            throw new IOException("Interrupted while creating audio pipe", exception);
         }
     }
 
-    private void deleteAudioPipe() {
-        if (audioPipe != null) {
+    private void closeAudioTransport() {
+        closeQuietly(audioInput);
+        audioInput = null;
+        if (audioSocket != null) {
             try {
-                Files.deleteIfExists(audioPipe);
+                audioSocket.close();
             } catch (IOException ignored) {
             }
-            audioPipe = null;
+            audioSocket = null;
+        }
+        closeAudioServer();
+    }
+
+    private void closeAudioServer() {
+        if (audioServer != null) {
+            try {
+                audioServer.close();
+            } catch (IOException ignored) {
+            }
+            audioServer = null;
         }
     }
 
