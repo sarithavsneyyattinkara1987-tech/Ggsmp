@@ -41,6 +41,22 @@ class AudioTimelineMixerTest {
     }
 
     @Test
+    void longLowRateConversionDoesNotOverflowSourceIndex() {
+        int frameCount = 45056;
+        ByteBuffer pcm = ByteBuffer.allocate(frameCount * 2).order(ByteOrder.LITTLE_ENDIAN);
+        for (int frame = 0; frame < frameCount; frame++) {
+            pcm.putShort((short) frame);
+        }
+        pcm.flip();
+
+        AudioEvent event = AudioEvent.fromDecodedPcm(pcm, new AudioFormat(8000.0f, 16, 1, true, false), 0L);
+
+        assertEquals((int) Math.ceil(frameCount * (48000.0d / 8000.0d)) * 2, event.targetSamples().length);
+        assertEquals((short) (frameCount - 1), event.targetSamples()[event.targetSamples().length - 2]);
+        assertEquals((short) (frameCount - 1), event.targetSamples()[event.targetSamples().length - 1]);
+    }
+
+    @Test
     void overlappingSoundsAreMixedWithoutClipping() {
         AudioTimelineMixer mixer = new AudioTimelineMixer();
         mixer.submitEvent(new AudioEvent(0L, 48000, 2, makeTone(48000, 2000), 48000L, 48000, 2, makeTone(48000, 2000)));

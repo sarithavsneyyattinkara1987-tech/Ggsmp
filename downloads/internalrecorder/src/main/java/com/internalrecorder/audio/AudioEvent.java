@@ -55,7 +55,7 @@ public record AudioEvent(
     }
 
     private static short[] resampleToStereo48k(short[] stereo, int sourceRate, int frameCount) {
-        if (stereo == null || stereo.length == 0 || sourceRate <= 0) {
+        if (stereo == null || stereo.length < 2 || sourceRate <= 0 || frameCount <= 0) {
             return new short[0];
         }
         if (sourceRate == 48_000) {
@@ -65,14 +65,19 @@ public record AudioEvent(
         int targetFrames = Math.max(1, (int) Math.ceil(frameCount * (48_000.0d / sourceRate)));
         short[] resampled = new short[targetFrames * 2];
         for (int index = 0; index < targetFrames; index++) {
-            int sourceIndex = Math.min(frameCount - 1, (int) ((index * sourceRate) / 48_000.0d));
-            int base = sourceIndex * 2;
-            if (base + 1 >= stereo.length) {
-                break;
-            }
-            resampled[index * 2] = stereo[base];
-            resampled[index * 2 + 1] = stereo[base + 1];
+            double sourcePosition = index * (double) sourceRate / 48_000.0d;
+            int firstFrame = Math.min(frameCount - 1, Math.max(0, (int) Math.floor(sourcePosition)));
+            int secondFrame = Math.min(frameCount - 1, firstFrame + 1);
+            double fraction = Math.max(0.0d, Math.min(1.0d, sourcePosition - firstFrame));
+            int firstIndex = firstFrame * 2;
+            int secondIndex = secondFrame * 2;
+            resampled[index * 2] = interpolate(stereo[firstIndex], stereo[secondIndex], fraction);
+            resampled[index * 2 + 1] = interpolate(stereo[firstIndex + 1], stereo[secondIndex + 1], fraction);
         }
         return resampled;
+    }
+
+    private static short interpolate(short first, short second, double fraction) {
+        return (short) Math.round(first + (second - first) * fraction);
     }
 }
