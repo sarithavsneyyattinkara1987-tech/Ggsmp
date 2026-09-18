@@ -13,12 +13,14 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.file.Path;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 public final class FfmpegEncoder {
+    static final String FFMPEG_PATH_PROPERTY = "internalrecorder.ffmpeg.path";
     private static final FramePacket END = new FramePacket(new byte[0], -1L);
 
     private final RecorderConfig config;
@@ -50,7 +52,7 @@ public final class FfmpegEncoder {
 
     public boolean start() throws IOException {
         List<String> command = new ArrayList<>();
-        command.add(config.ffmpegPath);
+        command.add(resolveFfmpegExecutable(config.ffmpegPath));
         command.add("-hide_banner");
         command.add("-loglevel");
         command.add("error");
@@ -123,6 +125,22 @@ public final class FfmpegEncoder {
             }
             throw exception;
         }
+    }
+
+    static String resolveFfmpegExecutable(String configuredPath) throws IOException {
+        String suppliedPath = System.getProperty(FFMPEG_PATH_PROPERTY);
+        if (suppliedPath == null || suppliedPath.isBlank()) {
+            return configuredPath == null || configuredPath.isBlank() ? "ffmpeg" : configuredPath;
+        }
+
+        Path executable = Path.of(suppliedPath).toAbsolutePath().normalize();
+        if (!Files.isRegularFile(executable)) {
+            throw new IOException("Configured FFmpeg executable does not exist: " + executable);
+        }
+        if (!Files.isExecutable(executable)) {
+            throw new IOException("Configured FFmpeg executable is not executable: " + executable);
+        }
+        return executable.toString();
     }
 
     public void submitVideo(FramePacket frame) {
