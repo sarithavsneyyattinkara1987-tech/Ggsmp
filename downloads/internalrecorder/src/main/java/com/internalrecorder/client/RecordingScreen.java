@@ -50,7 +50,6 @@ public final class RecordingScreen extends Screen {
 
     @Override
     public void render(DrawContext drawContext, int mouseX, int mouseY, float delta) {
-        renderBackground(drawContext, mouseX, mouseY, delta);
         drawContext.drawCenteredTextWithShadow(textRenderer, title, width / 2, height / 2 - 112, 0xFFFFFFFF);
         RecorderConfig config = RecordingManager.config();
         drawContext.drawCenteredTextWithShadow(textRenderer, Text.literal("Resolution: " + config.outputWidth + " x " + config.outputHeight), width / 2, height / 2 + 22, 0xFFB8C2D0);
