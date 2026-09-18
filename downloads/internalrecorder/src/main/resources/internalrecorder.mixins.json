@@ -5,6 +5,7 @@
   "compatibilityLevel": "JAVA_21",
   "client": [
     "GameMenuScreenMixin",
+    "ScreenInvoker",
     "MinecraftClientMixin",
     "SoundSystemMixin",
     "StaticSoundMixin"
